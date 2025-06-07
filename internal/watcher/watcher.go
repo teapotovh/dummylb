@@ -45,6 +45,8 @@ func (sw *ServiceWatcher) Start(ctx context.Context) (err error) {
 		return fmt.Errorf("error while instantiating informer: %w", err)
 	}
 	sw.informer.AddEventHandler(&serviceWatcherHandler{sw: sw})
+
+	watcherLog.Info("stopped service watcher")
 	return nil
 }
 
