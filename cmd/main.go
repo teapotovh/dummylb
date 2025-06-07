@@ -27,7 +27,9 @@ import (
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 
 	"github.com/teapotovh/dummylb/internal/ippool"
+	"github.com/teapotovh/dummylb/internal/speaker"
 	"github.com/teapotovh/dummylb/internal/watcher"
+
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
@@ -57,10 +59,12 @@ func main() {
 	var metricsAddr string
 	var metricsCertPath, metricsCertName, metricsCertKey string
 	var webhookCertPath, webhookCertName, webhookCertKey string
+	var arpIface string
 	var probeAddr string
 	var secureMetrics bool
 	var enableHTTP2 bool
 	var tlsOpts []func(*tls.Config)
+	flag.StringVar(&arpIface, "arp-interface", "eth0", "The interface on which ARP communication is performed.")
 	flag.StringVar(&metricsAddr, "metrics-bind-address", "0", "The address the metrics endpoint binds to. "+
 		"Use :8443 for HTTPS or :8080 for HTTP, or leave as 0 to disable the metrics service.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
@@ -211,6 +215,13 @@ func main() {
 
 	serviceWatcher.SetAddHandler(ippool.Default.HandleAdd)
 	serviceWatcher.SetDelHandler(ippool.Default.HandleDel)
+
+	arpSpeaker := speaker.NewARPSpeaker(arpIface)
+	setupLog.Info("adding ARP speaker to manager")
+	if err := mgr.Add(arpSpeaker); err != nil {
+		setupLog.Error(err, "unable to add ARP speaker to manager")
+		os.Exit(1)
+	}
 
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
 		setupLog.Error(err, "unable to set up health check")
