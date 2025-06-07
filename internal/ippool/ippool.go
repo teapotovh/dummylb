@@ -2,6 +2,7 @@ package ippool
 
 import (
 	"fmt"
+	"maps"
 	"net/netip"
 	"slices"
 	"sync"
@@ -23,29 +24,30 @@ type IPPool struct {
 	// store is a map from IPs to a slice of Kuberntes UIDs.
 	// This maps an IP to the list of services defining it.
 	store map[netip.Addr][]types.UID
-	cs    []chan []netip.Addr
+	cs    []chan map[netip.Addr]Unit
 }
 
 func NewIPPool() *IPPool {
 	return &IPPool{
 		store: map[netip.Addr][]types.UID{},
-		cs:    []chan []netip.Addr{},
+		cs:    []chan map[netip.Addr]Unit{},
 	}
 }
 
-func (p *IPPool) Subscribe() chan []netip.Addr {
+func (p *IPPool) Subscribe() chan map[netip.Addr]Unit {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	c := make(chan []netip.Addr, 1)
+	c := make(chan map[netip.Addr]Unit, 1)
 	p.cs = append(p.cs, c)
 	c <- p.copy()
 	return c
 }
 
-func (p *IPPool) copy() (ips []netip.Addr) {
+func (p *IPPool) copy() (ips map[netip.Addr]Unit) {
+	ips = make(map[netip.Addr]Unit, 0)
 	for ip, _ := range p.store {
-		ips = append(ips, ip)
+		ips[ip] = Unit{}
 	}
 	return
 }
@@ -132,9 +134,9 @@ func (p *IPPool) HandleDel(svc *corev1.Service) error {
 
 func (p *IPPool) notify() {
 	export := p.copy()
-	ippoolLog.Info("state updated", "state", export)
+	ippoolLog.Info("state updated", "state", maps.Keys(export))
 
 	for _, c := range p.cs {
-		c <- export[:]
+		c <- maps.Clone(export)
 	}
 }
