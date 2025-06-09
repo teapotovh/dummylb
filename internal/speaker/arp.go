@@ -24,8 +24,6 @@ type ARPSpeaker struct {
 	psource *gopacket.PacketSource
 	packets chan *layers.ARP
 	mac     net.HardwareAddr
-
-	updates chan map[netip.Addr]ippool.Unit
 }
 
 func NewARPSpeaker(iface string, trace bool) *ARPSpeaker {
@@ -72,7 +70,7 @@ type pkt struct {
 
 func (a *ARPSpeaker) speaker(ctx context.Context) {
 	arpspkrLog.Info("starting ARP speaker", "interface", a.iface)
-	a.updates = ippool.Default.Subscribe()
+	updates := ippool.Default.Subscribe()
 
 	ips := map[netip.Addr]ippool.Unit{}
 	buf := gopacket.NewSerializeBuffer()
@@ -82,9 +80,10 @@ func (a *ARPSpeaker) speaker(ctx context.Context) {
 		case <-ctx.Done():
 			running = false
 			break
-		case update := <-a.updates:
+		case update := <-updates:
 			ips = filterIPv4s(update)
 			arpspkrLog.Info("got ip configuration update", "update", ips)
+			break
 		case packet := <-a.packets:
 			srcIP := netip.AddrFrom4([net.IPv4len]byte(packet.SourceProtAddress))
 			dstIP := netip.AddrFrom4([net.IPv4len]byte(packet.DstProtAddress))
@@ -137,7 +136,7 @@ func (a *ARPSpeaker) speaker(ctx context.Context) {
 	}
 
 	arpspkrLog.Info("stopped ARP speaker")
-	close(a.updates)
+	close(updates)
 }
 
 func (a *ARPSpeaker) pcap(ctx context.Context) {

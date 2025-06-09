@@ -8,6 +8,7 @@ import (
 	"net/netip"
 	"time"
 
+	"github.com/coreos/go-iptables/iptables"
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/afpacket"
 	"github.com/google/gopacket/layers"
@@ -17,8 +18,12 @@ import (
 
 var (
 	nsspkrLog    = ctrl.Log.WithName("nsspkr")
+	nsdspkrLog   = ctrl.Log.WithName("nsdspkr")
+	ip6tablesLog = ctrl.Log.WithName("ip6tables")
 	multicastMAC = net.HardwareAddr{0x33, 0x33, 0x00, 0x00, 0x00, 0x01}
 )
+
+const IPTABLES_CHAIN_NAME = "dummylb"
 
 type NSSpeaker struct {
 	iface string
@@ -29,8 +34,7 @@ type NSSpeaker struct {
 	packets chan pkt
 	mac     net.HardwareAddr
 	ll      *netip.Addr
-
-	updates chan map[netip.Addr]ippool.Unit
+	iptb    *iptables.IPTables
 }
 
 func NewNSSpeaker(iface string, trace bool) *NSSpeaker {
@@ -86,9 +90,29 @@ func (a *NSSpeaker) Start(ctx context.Context) error {
 	}
 	a.psource = gopacket.NewPacketSource(a.handle, layers.LinkTypeEthernet)
 
+	iptb, err := iptables.NewWithProtocol(iptables.ProtocolIPv6)
+	if err != nil {
+		return fmt.Errorf("error while initializing iptables: %w", err)
+	}
+
+	chain_exists, err := iptb.ChainExists("filter", IPTABLES_CHAIN_NAME)
+	if err != nil {
+		return fmt.Errorf("error while checking if iptables chain exists: %w", err)
+	}
+	if !chain_exists {
+		if err := iptb.NewChain("filter", IPTABLES_CHAIN_NAME); err != nil {
+			return fmt.Errorf("error while creating iptables chain: %w", err)
+		}
+
+		iptb.Insert("filter", "FORWARD", 1, "-i", a.iface, "-j", IPTABLES_CHAIN_NAME)
+	}
+
+	a.iptb = iptb
+
 	go a.pcap(ctx)
 	go a.speaker(ctx)
 	go a.advertiser(ctx)
+	go a.ip6tables(ctx)
 
 	<-ctx.Done()
 	return nil
@@ -117,7 +141,7 @@ func netipToNet(ip *netip.Addr) net.IP {
 
 func (a *NSSpeaker) speaker(ctx context.Context) {
 	nsspkrLog.Info("starting NS speaker", "interface", a.iface)
-	a.updates = ippool.Default.Subscribe()
+	updates := ippool.Default.Subscribe()
 
 	ips := map[netip.Addr]ippool.Unit{}
 	buf := gopacket.NewSerializeBuffer()
@@ -127,9 +151,10 @@ func (a *NSSpeaker) speaker(ctx context.Context) {
 		case <-ctx.Done():
 			running = false
 			break
-		case update := <-a.updates:
+		case update := <-updates:
 			ips = filterIPv6s(update)
 			nsspkrLog.Info("got ip configuration update", "update", ips)
+			break
 		case pkt := <-a.packets:
 			eth := pkt.packet.LinkLayer().(*layers.Ethernet)
 			ip := pkt.packet.NetworkLayer().(*layers.IPv6)
@@ -138,7 +163,7 @@ func (a *NSSpeaker) speaker(ctx context.Context) {
 
 			if _, registered := ips[dstIP]; registered {
 				if a.trace {
-					arpspkrLog.Info("got NS request",
+					nsspkrLog.Info("got NS request",
 						"dst.ip", dstIP, "dst.ll", a.ll,
 						"src.ip", ip.SrcIP,
 					)
@@ -169,7 +194,7 @@ func (a *NSSpeaker) speaker(ctx context.Context) {
 				}
 
 				if err := buf.Clear(); err != nil {
-					arpspkrLog.Error(err, "error while clearing packet buffer")
+					nsspkrLog.Error(err, "error while clearing packet buffer")
 					continue
 				}
 				err := gopacket.SerializeLayers(buf, gopacket.SerializeOptions{
@@ -177,16 +202,16 @@ func (a *NSSpeaker) speaker(ctx context.Context) {
 					FixLengths:       true,
 				}, eth, ipv6, icmp, na)
 				if err != nil {
-					arpspkrLog.Error(err, "error while serializing NA reply")
+					nsspkrLog.Error(err, "error while serializing NA reply")
 					continue
 				}
 				if err := a.handle.WritePacketData(buf.Bytes()); err != nil {
-					arpspkrLog.Error(err, "error while writing NA reply on the wire")
+					nsspkrLog.Error(err, "error while writing NA reply on the wire")
 					continue
 				}
 
 				if a.trace {
-					arpspkrLog.Info("sent NA reply", "packet", na)
+					nsspkrLog.Info("sent NA reply", "packet", na)
 				}
 			}
 			break
@@ -194,7 +219,7 @@ func (a *NSSpeaker) speaker(ctx context.Context) {
 	}
 
 	nsspkrLog.Info("stopped NS speaker")
-	close(a.updates)
+	close(updates)
 }
 
 func (a *NSSpeaker) unsolicited(ips map[netip.Addr]ippool.Unit) {
@@ -230,7 +255,7 @@ func (a *NSSpeaker) unsolicited(ips map[netip.Addr]ippool.Unit) {
 		}
 
 		if err := buf.Clear(); err != nil {
-			arpspkrLog.Error(err, "error while clearing packet buffer")
+			nsdspkrLog.Error(err, "error while clearing packet buffer")
 			continue
 		}
 		err := gopacket.SerializeLayers(buf, gopacket.SerializeOptions{
@@ -238,23 +263,23 @@ func (a *NSSpeaker) unsolicited(ips map[netip.Addr]ippool.Unit) {
 			FixLengths:       true,
 		}, eth, ipv6, icmp, na)
 		if err != nil {
-			arpspkrLog.Error(err, "error while serializing NA reply")
+			nsdspkrLog.Error(err, "error while serializing NA reply")
 			continue
 		}
 		if err := a.handle.WritePacketData(buf.Bytes()); err != nil {
-			arpspkrLog.Error(err, "error while writing NA reply on the wire")
+			nsdspkrLog.Error(err, "error while writing NA reply on the wire")
 			continue
 		}
 
 		if a.trace {
-			arpspkrLog.Info("sent unsolicited NA", "packet", na)
+			nsdspkrLog.Info("sent unsolicited NA", "packet", na)
 		}
 	}
 }
 
 func (a *NSSpeaker) advertiser(ctx context.Context) {
-	nsspkrLog.Info("starting NS unsolicited advertiser", "interface", a.iface)
-	a.updates = ippool.Default.Subscribe()
+	nsdspkrLog.Info("starting NS unsolicited advertiser", "interface", a.iface)
+	updates := ippool.Default.Subscribe()
 
 	ips := map[netip.Addr]ippool.Unit{}
 	running := true
@@ -264,9 +289,9 @@ func (a *NSSpeaker) advertiser(ctx context.Context) {
 		case <-ctx.Done():
 			running = false
 			break
-		case update := <-a.updates:
+		case update := <-updates:
 			ips = filterIPv6s(update)
-			arpspkrLog.Info("got ip configuration update", "update", ips)
+			nsdspkrLog.Info("got ip configuration update", "update", ips)
 			a.unsolicited(ips)
 			break
 		case <-ticker.C:
@@ -275,8 +300,8 @@ func (a *NSSpeaker) advertiser(ctx context.Context) {
 		}
 	}
 
-	nsspkrLog.Info("stopped NS unsolicited advertiser")
-	close(a.updates)
+	nsdspkrLog.Info("stopped NS unsolicited advertiser")
+	close(updates)
 }
 
 func (a *NSSpeaker) pcap(ctx context.Context) {
@@ -311,4 +336,37 @@ func (a *NSSpeaker) pcap(ctx context.Context) {
 
 	close(a.packets)
 	nsspkrLog.Info("stopped NS sniffer")
+}
+
+func (a *NSSpeaker) ip6tables(ctx context.Context) {
+	ip6tablesLog.Info("starting ip6tables updater")
+	updates := ippool.Default.Subscribe()
+	running := true
+
+	for running {
+		select {
+		case <-ctx.Done():
+			running = false
+			break
+		case update := <-updates:
+			ips := filterIPv6s(update)
+			ip6tablesLog.Info("got ip configuration update", "update", ips)
+
+			err := a.iptb.ClearChain("filter", IPTABLES_CHAIN_NAME)
+			if err != nil {
+				ip6tablesLog.Error(err, "error while clearing ip6tables rules")
+				continue
+			}
+
+			for ip := range ips {
+				if err := a.iptb.AppendUnique("filter", IPTABLES_CHAIN_NAME, "-s", ip.String(), "-p", "icmpv6", "--icmpv6-type", "echo-request", "-j", "ACCEPT"); err != nil {
+					ip6tablesLog.Error(err, "error while updating ip6tables rules", "ip", ip.String())
+				}
+			}
+			break
+		}
+	}
+
+	ip6tablesLog.Info("stopped ip6tables updater")
+	close(updates)
 }
