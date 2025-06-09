@@ -59,13 +59,14 @@ func main() {
 	var metricsAddr string
 	var metricsCertPath, metricsCertName, metricsCertKey string
 	var webhookCertPath, webhookCertName, webhookCertKey string
-	var arpIface string
+	var arpIface, nsIface string
 	var probeAddr string
 	var secureMetrics bool
 	var enableHTTP2 bool
 	var tracePackets bool
 	var tlsOpts []func(*tls.Config)
 	flag.StringVar(&arpIface, "arp-interface", "eth0", "The interface on which ARP communication is performed.")
+	flag.StringVar(&nsIface, "ns-interface", "eth0", "The interface on which NS communication is performed.")
 	flag.BoolVar(&tracePackets, "trace-packets", false, "Whether to print ARP and NDP packets received/sent.")
 	flag.StringVar(&metricsAddr, "metrics-bind-address", "0", "The address the metrics endpoint binds to. "+
 		"Use :8443 for HTTPS or :8080 for HTTP, or leave as 0 to disable the metrics service.")
@@ -222,6 +223,13 @@ func main() {
 	setupLog.Info("adding ARP speaker to manager")
 	if err := mgr.Add(arpSpeaker); err != nil {
 		setupLog.Error(err, "unable to add ARP speaker to manager")
+		os.Exit(1)
+	}
+
+	nsSpeaker := speaker.NewNSSpeaker(nsIface, tracePackets)
+	setupLog.Info("adding NS speaker to manager")
+	if err := mgr.Add(nsSpeaker); err != nil {
+		setupLog.Error(err, "unable to add NS speaker to manager")
 		os.Exit(1)
 	}
 
