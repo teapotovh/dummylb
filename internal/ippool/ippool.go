@@ -134,7 +134,7 @@ func (p *IPPool) HandleDel(svc *corev1.Service) error {
 
 func (p *IPPool) notify() {
 	export := p.copy()
-	ippoolLog.Info("state updated", "state", maps.Keys(export))
+	ippoolLog.Info("state updated", "state", export)
 
 	for _, c := range p.cs {
 		c <- maps.Clone(export)
