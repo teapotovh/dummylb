@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"maps"
 	"net"
 	"net/netip"
 
@@ -56,6 +55,21 @@ func (a *ARPSpeaker) Start(ctx context.Context) error {
 	return nil
 }
 
+func filterIPv4s(ips map[netip.Addr]ippool.Unit) map[netip.Addr]ippool.Unit {
+	result := map[netip.Addr]ippool.Unit{}
+	for ip, _ := range ips {
+		if ip.Is4() {
+			result[ip] = ippool.Unit{}
+		}
+	}
+	return result
+}
+
+type pkt struct {
+	packet gopacket.Packet
+	layer  gopacket.Layer
+}
+
 func (a *ARPSpeaker) speaker(ctx context.Context) {
 	arpspkrLog.Info("starting ARP speaker", "interface", a.iface)
 	a.updates = ippool.Default.Subscribe()
@@ -69,13 +83,13 @@ func (a *ARPSpeaker) speaker(ctx context.Context) {
 			running = false
 			break
 		case update := <-a.updates:
-			arpspkrLog.Info("got ip configuration update", "update", maps.Keys(update))
-			ips = update
+			ips = filterIPv4s(update)
+			arpspkrLog.Info("got ip configuration update", "update", ips)
 		case packet := <-a.packets:
 			srcIP := netip.AddrFrom4([net.IPv4len]byte(packet.SourceProtAddress))
 			dstIP := netip.AddrFrom4([net.IPv4len]byte(packet.DstProtAddress))
 
-			if _, registered := ips[dstIP]; registered {
+			if _, registered := ips[dstIP]; registered && packet.Operation == layers.ARPRequest {
 				if a.trace {
 					arpspkrLog.Info("got ARP request",
 						"dst.ip", dstIP, "dst.mac", a.mac,
