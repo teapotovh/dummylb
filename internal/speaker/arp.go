@@ -133,9 +133,7 @@ func (a *ARPSpeaker) speaker(ctx context.Context) {
 				}
 			}
 			break
-		default:
 		}
-
 	}
 
 	arpspkrLog.Info("stopped ARP speaker")

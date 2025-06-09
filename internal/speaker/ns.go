@@ -190,9 +190,7 @@ func (a *NSSpeaker) speaker(ctx context.Context) {
 				}
 			}
 			break
-		default:
 		}
-
 	}
 
 	nsspkrLog.Info("stopped NS speaker")
@@ -274,9 +272,7 @@ func (a *NSSpeaker) advertiser(ctx context.Context) {
 		case <-ticker.C:
 			a.unsolicited(ips)
 			break
-		default:
 		}
-
 	}
 
 	nsspkrLog.Info("stopped NS unsolicited advertiser")
