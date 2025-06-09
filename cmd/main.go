@@ -19,6 +19,7 @@ package main
 import (
 	"crypto/tls"
 	"flag"
+	"fmt"
 	"os"
 	"path/filepath"
 
@@ -30,6 +31,7 @@ import (
 	"github.com/teapotovh/dummylb/internal/speaker"
 	"github.com/teapotovh/dummylb/internal/watcher"
 
+	"github.com/vishvananda/netlink"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
@@ -46,12 +48,31 @@ import (
 var (
 	scheme   = runtime.NewScheme()
 	setupLog = ctrl.Log.WithName("setup")
+
+	v4Iface = "eth0"
+	v6Iface = "eth0"
 )
 
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 
 	// +kubebuilder:scaffold:scheme
+
+	routes, _ := netlink.RouteList(nil, netlink.FAMILY_ALL)
+	for _, r := range routes {
+		if r.Dst.IP.IsUnspecified() {
+			iface, err := netlink.LinkByIndex(r.LinkIndex)
+			if err != nil {
+				panic(fmt.Sprintf("could not get interface by name (looking for default interfaces): %s", err))
+			}
+
+			if r.Family == netlink.FAMILY_V4 {
+				v4Iface = iface.Attrs().Name
+			} else if r.Family == netlink.FAMILY_V6 {
+				v6Iface = iface.Attrs().Name
+			}
+		}
+	}
 }
 
 // nolint:gocyclo
@@ -65,8 +86,8 @@ func main() {
 	var enableHTTP2 bool
 	var tracePackets bool
 	var tlsOpts []func(*tls.Config)
-	flag.StringVar(&arpIface, "arp-interface", "eth0", "The interface on which ARP communication is performed.")
-	flag.StringVar(&nsIface, "ns-interface", "eth0", "The interface on which NS communication is performed.")
+	flag.StringVar(&arpIface, "arp-interface", v4Iface, "The interface on which ARP communication is performed.")
+	flag.StringVar(&nsIface, "ns-interface", v6Iface, "The interface on which NS communication is performed.")
 	flag.BoolVar(&tracePackets, "trace-packets", false, "Whether to print ARP and NDP packets received/sent.")
 	flag.StringVar(&metricsAddr, "metrics-bind-address", "0", "The address the metrics endpoint binds to. "+
 		"Use :8443 for HTTPS or :8080 for HTTP, or leave as 0 to disable the metrics service.")
