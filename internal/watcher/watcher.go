@@ -109,7 +109,7 @@ func (swh *serviceWatcherHandler) OnAdd(obj interface{}, isInInitialList bool) {
 func (swh *serviceWatcherHandler) OnUpdate(oldObj, newObj interface{}) {
 	oldSvc := oldObj.(*corev1.Service)
 	newSvc := newObj.(*corev1.Service)
-	watcherLog.Info("service updated", "old.namespace", oldSvc.Namespace, "old.name", oldSvc.Name, "new.namespace", newSvc.Namespace, "new.name", newSvc.Name)
+	watcherLog.Info("service updated", "namespace", oldSvc.Namespace, "name", oldSvc.Name)
 
 	swh.sw.callDel(oldSvc)
 	swh.sw.callAdd(newSvc)

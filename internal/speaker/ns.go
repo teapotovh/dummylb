@@ -17,6 +17,7 @@ import (
 
 var (
 	nsspkrLog    = ctrl.Log.WithName("nsspkr")
+	nsdspkrLog   = ctrl.Log.WithName("nsdspkr")
 	multicastMAC = net.HardwareAddr{0x33, 0x33, 0x00, 0x00, 0x00, 0x01}
 )
 
@@ -29,8 +30,6 @@ type NSSpeaker struct {
 	packets chan pkt
 	mac     net.HardwareAddr
 	ll      *netip.Addr
-
-	updates chan map[netip.Addr]ippool.Unit
 }
 
 func NewNSSpeaker(iface string, trace bool) *NSSpeaker {
@@ -117,7 +116,7 @@ func netipToNet(ip *netip.Addr) net.IP {
 
 func (a *NSSpeaker) speaker(ctx context.Context) {
 	nsspkrLog.Info("starting NS speaker", "interface", a.iface)
-	a.updates = ippool.Default.Subscribe()
+	updates := ippool.Default.Subscribe()
 
 	ips := map[netip.Addr]ippool.Unit{}
 	buf := gopacket.NewSerializeBuffer()
@@ -127,9 +126,10 @@ func (a *NSSpeaker) speaker(ctx context.Context) {
 		case <-ctx.Done():
 			running = false
 			break
-		case update := <-a.updates:
+		case update := <-updates:
 			ips = filterIPv6s(update)
 			nsspkrLog.Info("got ip configuration update", "update", ips)
+			break
 		case pkt := <-a.packets:
 			eth := pkt.packet.LinkLayer().(*layers.Ethernet)
 			ip := pkt.packet.NetworkLayer().(*layers.IPv6)
@@ -138,7 +138,7 @@ func (a *NSSpeaker) speaker(ctx context.Context) {
 
 			if _, registered := ips[dstIP]; registered {
 				if a.trace {
-					arpspkrLog.Info("got NS request",
+					nsspkrLog.Info("got NS request",
 						"dst.ip", dstIP, "dst.ll", a.ll,
 						"src.ip", ip.SrcIP,
 					)
@@ -169,7 +169,7 @@ func (a *NSSpeaker) speaker(ctx context.Context) {
 				}
 
 				if err := buf.Clear(); err != nil {
-					arpspkrLog.Error(err, "error while clearing packet buffer")
+					nsspkrLog.Error(err, "error while clearing packet buffer")
 					continue
 				}
 				err := gopacket.SerializeLayers(buf, gopacket.SerializeOptions{
@@ -177,16 +177,16 @@ func (a *NSSpeaker) speaker(ctx context.Context) {
 					FixLengths:       true,
 				}, eth, ipv6, icmp, na)
 				if err != nil {
-					arpspkrLog.Error(err, "error while serializing NA reply")
+					nsspkrLog.Error(err, "error while serializing NA reply")
 					continue
 				}
 				if err := a.handle.WritePacketData(buf.Bytes()); err != nil {
-					arpspkrLog.Error(err, "error while writing NA reply on the wire")
+					nsspkrLog.Error(err, "error while writing NA reply on the wire")
 					continue
 				}
 
 				if a.trace {
-					arpspkrLog.Info("sent NA reply", "packet", na)
+					nsspkrLog.Info("sent NA reply", "packet", na)
 				}
 			}
 			break
@@ -194,7 +194,7 @@ func (a *NSSpeaker) speaker(ctx context.Context) {
 	}
 
 	nsspkrLog.Info("stopped NS speaker")
-	close(a.updates)
+	close(updates)
 }
 
 func (a *NSSpeaker) unsolicited(ips map[netip.Addr]ippool.Unit) {
@@ -230,7 +230,7 @@ func (a *NSSpeaker) unsolicited(ips map[netip.Addr]ippool.Unit) {
 		}
 
 		if err := buf.Clear(); err != nil {
-			arpspkrLog.Error(err, "error while clearing packet buffer")
+			nsdspkrLog.Error(err, "error while clearing packet buffer")
 			continue
 		}
 		err := gopacket.SerializeLayers(buf, gopacket.SerializeOptions{
@@ -238,23 +238,23 @@ func (a *NSSpeaker) unsolicited(ips map[netip.Addr]ippool.Unit) {
 			FixLengths:       true,
 		}, eth, ipv6, icmp, na)
 		if err != nil {
-			arpspkrLog.Error(err, "error while serializing NA reply")
+			nsdspkrLog.Error(err, "error while serializing NA reply")
 			continue
 		}
 		if err := a.handle.WritePacketData(buf.Bytes()); err != nil {
-			arpspkrLog.Error(err, "error while writing NA reply on the wire")
+			nsdspkrLog.Error(err, "error while writing NA reply on the wire")
 			continue
 		}
 
 		if a.trace {
-			arpspkrLog.Info("sent unsolicited NA", "packet", na)
+			nsdspkrLog.Info("sent unsolicited NA", "packet", na)
 		}
 	}
 }
 
 func (a *NSSpeaker) advertiser(ctx context.Context) {
-	nsspkrLog.Info("starting NS unsolicited advertiser", "interface", a.iface)
-	a.updates = ippool.Default.Subscribe()
+	nsdspkrLog.Info("starting NS unsolicited advertiser", "interface", a.iface)
+	updates := ippool.Default.Subscribe()
 
 	ips := map[netip.Addr]ippool.Unit{}
 	running := true
@@ -264,9 +264,9 @@ func (a *NSSpeaker) advertiser(ctx context.Context) {
 		case <-ctx.Done():
 			running = false
 			break
-		case update := <-a.updates:
+		case update := <-updates:
 			ips = filterIPv6s(update)
-			arpspkrLog.Info("got ip configuration update", "update", ips)
+			nsdspkrLog.Info("got ip configuration update", "update", ips)
 			a.unsolicited(ips)
 			break
 		case <-ticker.C:
@@ -275,8 +275,8 @@ func (a *NSSpeaker) advertiser(ctx context.Context) {
 		}
 	}
 
-	nsspkrLog.Info("stopped NS unsolicited advertiser")
-	close(a.updates)
+	nsdspkrLog.Info("stopped NS unsolicited advertiser")
+	close(updates)
 }
 
 func (a *NSSpeaker) pcap(ctx context.Context) {
