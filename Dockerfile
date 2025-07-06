@@ -3,6 +3,8 @@ FROM docker.io/golang:1.23 AS builder
 ARG TARGETOS
 ARG TARGETARCH
 
+RUN apt-get update && apt-get install -y iptables
+
 WORKDIR /workspace
 # Copy the Go Modules manifests
 COPY go.mod go.mod
@@ -26,6 +28,13 @@ RUN GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -a -o manager cmd/main
 # Refer to https://github.com/GoogleContainerTools/distroless for more details
 FROM gcr.io/distroless/cc-debian12
 WORKDIR /
+COPY --from=builder /usr/sbin/ip6tables /usr/sbin/ip6tables
+COPY --from=builder /usr/sbin/iptables /usr/sbin/iptables
+COPY --from=builder /lib/x86_64-linux-gnu/libxtables.so.12 /lib/x86_64-linux-gnu/
+COPY --from=builder /lib/x86_64-linux-gnu/libdl.so.2 /lib/x86_64-linux-gnu/
+COPY --from=builder /lib/x86_64-linux-gnu/libmnl.so.0 /lib/x86_64-linux-gnu/
+COPY --from=builder /lib/x86_64-linux-gnu/libnftnl.so.11 /lib/x86_64-linux-gnu/
+COPY --from=builder /usr/lib/x86_64-linux-gnu/xtables/ /usr/lib/x86_64-linux-gnu/xtables/
 COPY --from=builder /workspace/manager .
 USER 65532:65532
 
